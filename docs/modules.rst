@@ -6,6 +6,5 @@ Python Modules
 
    src.app
    src.monitoring
-   src.config
-   src.database
-   src.models 
+   src.models
+   src.database 

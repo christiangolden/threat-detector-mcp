@@ -1,5 +1,5 @@
-Welcome to Threat Analysis MCP Server's documentation!
-================================================
+Welcome to Threat Analysis MCP's documentation!
+============================================
 
 .. toctree::
    :maxdepth: 2

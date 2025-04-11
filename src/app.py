@@ -1,7 +1,7 @@
-"""Threat Analysis MCP Server - FastAPI Application
+"""Threat Analysis API - FastAPI Application
 
 This module provides a FastAPI-based server for analyzing text communications
-for potential terrorist threats using NLP and machine learning techniques.
+for potential threats using NLTK and machine learning techniques.
 
 The server provides endpoints for:
 - Text analysis (/analyze)
@@ -10,7 +10,7 @@ The server provides endpoints for:
 
 Key features:
 - Text analysis using NLTK
-- Sentiment analysis using VADER
+- Sentiment analysis using Transformers
 - Named entity recognition
 - Threat keyword detection
 - Comprehensive logging
@@ -18,101 +18,54 @@ Key features:
 """
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, validator
-from typing import List, Dict, Optional
-import nltk
-from nltk.sentiment import SentimentIntensityAnalyzer
-from nltk.tokenize import word_tokenize
-from nltk.tag import pos_tag
-from nltk.chunk import ne_chunk
-import re
+import json
 import logging
-from logging.handlers import RotatingFileHandler
-import traceback
-from datetime import datetime
+import logging.handlers
 import os
 import time
-from .monitoring import monitoring
+from typing import Dict, List, Optional, Union
+import nltk
+import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from datetime import datetime
+from src.monitoring import Monitoring
+from src.database import Database, DatabaseError
+
+# Download required NLTK data
+nltk.download('punkt')
+nltk.download('averaged_perceptron_tagger')
+nltk.download('wordnet')
+
+# Initialize FastAPI app
+app = FastAPI(title="Threat Analysis API")
+
+# Initialize monitoring and database
+monitoring = Monitoring()
+db = Database()
+
+# Initialize transformers model and tokenizer
+model_name = "distilbert-base-uncased-finetuned-sst-2-english"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSequenceClassification.from_pretrained(model_name)
 
 # Configure logging
-def setup_logging():
-    """Configure logging for the application.
+logger = logging.getLogger(__name__)
+
+class TextInput(BaseModel):
+    """Request model for text analysis endpoint.
     
-    Sets up:
-    - Rotating file handlers for general and error logs
-    - Console handler with colored output
-    - Custom log levels for analysis and threat detection
-    - Detailed log formatting with timestamps and context
-    
-    Returns:
-        logging.Logger: Configured logger instance
+    Attributes:
+        text (str): The text to analyze
     """
-    # Create logs directory if it doesn't exist
-    if not os.path.exists('logs'):
-        os.makedirs('logs')
+    text: str
     
-    # Create a detailed formatter
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(funcName)s - %(message)s'
-    )
-    
-    # Create file handler with rotation
-    file_handler = RotatingFileHandler(
-        'logs/app.log',
-        maxBytes=1024*1024,  # 1MB
-        backupCount=5,
-        encoding='utf-8'
-    )
-    file_handler.setFormatter(formatter)
-    file_handler.setLevel(logging.INFO)
-    
-    # Create error file handler
-    error_handler = RotatingFileHandler(
-        'logs/error.log',
-        maxBytes=1024*1024,  # 1MB
-        backupCount=5,
-        encoding='utf-8'
-    )
-    error_handler.setFormatter(formatter)
-    error_handler.setLevel(logging.ERROR)
-    
-    # Create console handler with color
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    console_handler.setLevel(logging.INFO)
-    
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-    root_logger.addHandler(file_handler)
-    root_logger.addHandler(error_handler)
-    root_logger.addHandler(console_handler)
-    
-    # Create application logger
-    logger = logging.getLogger('threat_analysis')
-    logger.setLevel(logging.INFO)
-    
-    # Add custom log levels
-    logging.addLevelName(logging.INFO + 5, "ANALYSIS")
-    logging.addLevelName(logging.INFO + 10, "THREAT")
-    
-    return logger
-
-logger = setup_logging()
-
-app = FastAPI(title="Threat Analysis MCP Server")
-
-# Initialize NLTK components
-try:
-    nltk.download('punkt')
-    nltk.download('averaged_perceptron_tagger')
-    nltk.download('maxent_ne_chunker')
-    nltk.download('words')
-    nltk.download('vader_lexicon')
-    logger.info("Successfully initialized NLTK components")
-except Exception as e:
-    logger.error(f"Error downloading NLTK data: {str(e)}")
-    raise
+    @validator('text')
+    def validate_text(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Text cannot be empty')
+        return v.strip()
 
 class TextAnalysisRequest(BaseModel):
     """Request model for text analysis endpoint.
@@ -125,24 +78,10 @@ class TextAnalysisRequest(BaseModel):
     metadata: Optional[Dict] = None
     
     @validator('text')
-    @classmethod
-    def validate_text(cls, v: str) -> str:
-        """Validate the text input.
-        
-        Args:
-            v (str): The text to validate
-            
-        Returns:
-            str: The validated text
-            
-        Raises:
-            ValueError: If text is empty or exceeds length limit
-        """
-        if not v.strip():
-            raise ValueError("Text cannot be empty")
-        if len(v) > 10000:
-            raise ValueError("Text length exceeds maximum limit of 10000 characters")
-        return v
+    def validate_text(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Text cannot be empty')
+        return v.strip()
 
 class TextAnalysisResponse(BaseModel):
     """Response model for text analysis endpoint.
@@ -161,6 +100,7 @@ class TextAnalysisResponse(BaseModel):
     sentiment: Dict[str, float]
     entities: List[Dict[str, str]]
     pos_tags: List[Dict[str, str]]
+    timestamp: str
 
 # Threat-related keywords and their weights
 THREAT_KEYWORDS = {
@@ -177,130 +117,46 @@ THREAT_KEYWORDS = {
 }
 
 def analyze_text(text: str) -> TextAnalysisResponse:
-    """Analyze text for potential threats using NLP techniques.
-    
-    Performs:
-    - Tokenization and POS tagging
-    - Named entity recognition
-    - Threat keyword detection
-    - Sentiment analysis
-    
-    Args:
-        text (str): The text to analyze
-        
-    Returns:
-        TextAnalysisResponse: Analysis results including threat score and patterns
-        
-    Raises:
-        Exception: If any analysis step fails
-    """
+    """Analyze text for potential threats using NLTK and sentiment analysis."""
     try:
-        logger.info(f"Starting analysis of text (length: {len(text)})")
-        
-        # Initialize sentiment analyzer
-        sia = SentimentIntensityAnalyzer()
-        
-        # Calculate threat score
-        threat_score = 0.0
-        suspicious_patterns = []
-        confidence = 0.0
-        
         # Tokenize and tag parts of speech
-        try:
-            tokens = word_tokenize(text.lower())
-            pos_tags = pos_tag(tokens)
-            logger.debug(f"Successfully tokenized text into {len(tokens)} tokens")
-        except Exception as e:
-            logger.error(f"Error in tokenization: {str(e)}")
-            raise
+        tokens = nltk.word_tokenize(text)
+        pos_tags = nltk.pos_tag(tokens)
         
-        # Named entity recognition
-        try:
-            named_entities = ne_chunk(pos_tags)
-            logger.debug("Successfully performed named entity recognition")
-        except Exception as e:
-            logger.error(f"Error in named entity recognition: {str(e)}")
-            raise
-        
-        # Extract entities
-        entities = []
-        current_entity = []
-        current_label = None
-        
-        try:
-            for chunk in named_entities:
-                if hasattr(chunk, 'label'):
-                    if current_entity:
-                        entities.append({
-                            'text': ' '.join(current_entity),
-                            'type': current_label
-                        })
-                    current_entity = [chunk[0][0]]
-                    current_label = chunk.label()
-                else:
-                    if current_entity:
-                        current_entity.append(chunk[0])
-                    else:
-                        entities.append({
-                            'text': chunk[0],
-                            'type': chunk[1]
-                        })
-            
-            if current_entity:
-                entities.append({
-                    'text': ' '.join(current_entity),
-                    'type': current_label
-                })
-            logger.debug(f"Extracted {len(entities)} entities")
-        except Exception as e:
-            logger.error(f"Error in entity extraction: {str(e)}")
-            raise
-        
-        # Check for threat keywords
-        try:
-            for word in tokens:
-                if word in THREAT_KEYWORDS:
-                    threat_score += THREAT_KEYWORDS[word]
+        # Identify suspicious patterns (nouns and verbs that might indicate threats)
+        suspicious_patterns = []
+        for word, tag in pos_tags:
+            if tag.startswith(('NN', 'VB')):  # Nouns and verbs
+                if word.lower() in ['kill', 'harm', 'attack', 'destroy', 'threat', 'danger']:
                     suspicious_patterns.append(word)
-            
-            # Normalize threat score
-            threat_score = min(threat_score, 1.0)
-            logger.debug(f"Calculated threat score: {threat_score}")
-        except Exception as e:
-            logger.error(f"Error in threat analysis: {str(e)}")
-            raise
         
-        # Calculate confidence
-        try:
-            confidence = min(len(suspicious_patterns) * 0.1 + len(text) * 0.001, 1.0)
-            logger.debug(f"Calculated confidence score: {confidence}")
-        except Exception as e:
-            logger.error(f"Error in confidence calculation: {str(e)}")
-            raise
+        # Calculate threat score based on suspicious patterns
+        threat_score = min(len(suspicious_patterns) / 5, 1.0)  # Normalize to 0-1 range
         
-        # Get sentiment scores
-        try:
-            sentiment_scores = sia.polarity_scores(text)
-            logger.debug(f"Calculated sentiment scores: {sentiment_scores}")
-        except Exception as e:
-            logger.error(f"Error in sentiment analysis: {str(e)}")
-            raise
+        # Perform sentiment analysis
+        sentiment_result = sentiment_analyzer(text)[0]
+        sentiment = sentiment_result['label']
         
-        response = TextAnalysisResponse(
+        # Extract entities (simplified version using NLTK)
+        entities = []
+        for word, tag in pos_tags:
+            if tag.startswith('NNP'):  # Proper nouns
+                entities.append({
+                    'text': word,
+                    'type': 'PERSON' if word.istitle() else 'ORGANIZATION'
+                })
+        
+        return TextAnalysisResponse(
             threat_score=threat_score,
+            sentiment=sentiment,
             suspicious_patterns=suspicious_patterns,
-            confidence=confidence,
-            sentiment=sentiment_scores,
             entities=entities,
-            pos_tags=[{'word': word, 'tag': tag} for word, tag in pos_tags]
+            pos_tags=[{'word': word, 'tag': tag} for word, tag in pos_tags],
+            timestamp=datetime.now().isoformat()
         )
-        
-        logger.info("Successfully completed text analysis")
-        return response
-        
     except Exception as e:
-        logger.error(f"Unexpected error in analyze_text: {str(e)}\n{traceback.format_exc()}")
-        raise
+        logger.error(f"Error analyzing text: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error analyzing text")
 
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
@@ -334,46 +190,166 @@ async def get_metrics():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint.
-    
-    Returns:
-        Dict[str, Any]: Health status including system metrics and application stats
-    """
+    """Check the health of the API."""
     try:
+        # Attempt to get recent analyses to verify database connection
+        db.get_recent_analyses(limit=1)
         health_status = monitoring.get_health_status()
+        health_status.update({
+            "database": "connected",
+            "status": "healthy"
+        })
         return health_status
+    except DatabaseError as e:
+        logger.error(f"Database health check failed: {str(e)}")
+        return {"status": "unhealthy", "database": "error", "detail": str(e)}
     except Exception as e:
         logger.error(f"Health check failed: {str(e)}")
-        raise HTTPException(status_code=500, detail="Health check failed")
+        return {"status": "unhealthy", "detail": str(e)}
 
-@app.post("/analyze", response_model=TextAnalysisResponse)
-async def analyze(request: TextAnalysisRequest):
-    """Analyze text for potential threats.
-    
-    Args:
-        request (TextAnalysisRequest): The text to analyze and optional metadata
-        
-    Returns:
-        TextAnalysisResponse: Analysis results
-        
-    Raises:
-        HTTPException: If analysis fails
-    """
+@app.post("/analyze")
+async def analyze(request: Request, text_input: TextInput):
+    """Analyze text for potential threats."""
     try:
-        logger.info(f"Received analysis request")
-        logger.info(f"Starting analysis of text (length: {len(request.text)})")
-        
+        # Start timing the request
         start_time = time.time()
-        response = analyze_text(request.text)
-        process_time = time.time() - start_time
+        
+        # Get sentiment analysis from transformers
+        inputs = tokenizer(text_input.text, return_tensors="pt", truncation=True, max_length=512)
+        outputs = model(**inputs)
+        prediction = torch.nn.functional.softmax(outputs.logits, dim=-1)
+        transformer_score = float(prediction[0][1].item())  # Probability of negative/threatening class
+        
+        # Get NLTK analysis
+        tokens = nltk.word_tokenize(text_input.text)
+        pos_tags = nltk.pos_tag(tokens)
+        
+        # Identify suspicious patterns with weights
+        suspicious_patterns = []
+        weighted_score = 0.0
+        max_keyword_weight = 0.0
+        
+        # First pass: find max keyword weight and collect patterns
+        for word, tag in pos_tags:
+            word_lower = word.lower()
+            if word_lower in THREAT_KEYWORDS:
+                suspicious_patterns.append(word)
+                weight = THREAT_KEYWORDS[word_lower]
+                weighted_score += weight
+                max_keyword_weight = max(max_keyword_weight, weight)
+                    
+        # Calculate final threat score
+        text_lower = text_input.text.lower()
+        
+        # Check for benign patterns (greetings, polite phrases)
+        benign_starts = ('hi', 'hello', 'hey', 'good morning', 'good afternoon', 'good evening')
+        benign_phrases = ('how are you', 'nice to meet', 'pleased to meet', 'good to see')
+        is_benign = (
+            any(text_lower.startswith(start) for start in benign_starts) or
+            any(phrase in text_lower for phrase in benign_phrases)
+        )
+        
+        if not suspicious_patterns:
+            # No threat keywords found - assume benign unless very negative sentiment
+            if is_benign or transformer_score < 0.8:
+                threat_score = 0.0  # Truly benign text
+            else:
+                threat_score = max(0.0, (transformer_score - 0.8) * 0.5)  # Scale down high negative sentiment
+        else:
+            # Threat keywords found - use weighted combination
+            keyword_score = min(1.0, weighted_score / 0.8)  # Normalize weighted score
+            # If we find high-weight keywords (bomb, kill), boost the score significantly
+            if max_keyword_weight >= 0.4:
+                threat_score = max(0.6, keyword_score)
+            else:
+                # Otherwise blend keyword score with transformer score, emphasizing keywords
+                threat_score = (keyword_score * 0.8) + (transformer_score * 0.2)
+        
+        # Final normalization and thresholding
+        threat_score = min(1.0, max(0.0, threat_score))
+        
+        # Very short messages without threat words should score 0
+        if (len(tokens) < 3 and not suspicious_patterns) or is_benign:
+            threat_score = 0.0
+        
+        # Extract entities
+        entities = []
+        for word, tag in pos_tags:
+            if tag.startswith('NNP'):  # Proper nouns
+                entities.append({
+                    'text': word,
+                    'type': 'PERSON' if word.istitle() else 'ORGANIZATION'
+                })
+        
+        # Store analysis in database
+        analysis_id = db.store_analysis(
+            text=text_input.text,
+            threat_score=threat_score,
+            sentiment="negative" if transformer_score > 0.5 else "positive",
+            suspicious_patterns=suspicious_patterns,
+            entities=entities,
+            pos_tags=[{'word': word, 'tag': tag} for word, tag in pos_tags]
+        )
         
         # Track metrics
-        monitoring.track_threat_score(response.threat_score)
-        await monitoring.track_request(request, process_time)
+        response_time = time.time() - start_time
+        await monitoring.track_request(request, response_time)
+        monitoring.track_threat_score(threat_score)
         
-        logger.info("Successfully completed text analysis")
-        return response
+        return {
+            "text": text_input.text,
+            "threat_score": threat_score,
+            "suspicious_patterns": suspicious_patterns,
+            "sentiment": "negative" if transformer_score > 0.5 else "positive",
+            "entities": entities,
+            "pos_tags": [{'word': word, 'tag': tag} for word, tag in pos_tags],
+            "analysis_id": analysis_id,
+            "timestamp": datetime.now().isoformat()
+        }
     except Exception as e:
-        logger.error(f"Analysis failed: {str(e)}\n{traceback.format_exc()}")
-        monitoring.track_error("analysis_error")
-        raise HTTPException(status_code=500, detail="Analysis failed") 
+        monitoring.track_error(error_type=str(type(e).__name__))
+        raise HTTPException(
+            status_code=500,
+            detail="Error processing text"
+        )
+
+def setup_logging():
+    """Set up logging configuration."""
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+
+    # Create logs directory if it doesn't exist
+    if not os.path.exists('logs'):
+        os.makedirs('logs')
+
+    # Create file handler for logging
+    file_handler = logging.handlers.RotatingFileHandler(
+        'logs/app.log',
+        maxBytes=1024 * 1024,  # 1MB
+        backupCount=5
+    )
+    file_handler.setLevel(logging.INFO)
+
+    # Create console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+
+    # Create formatter
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+
+    # Add handlers to logger
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    return logger
+
+# Set up logging
+logger = setup_logging()
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

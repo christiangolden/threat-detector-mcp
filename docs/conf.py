@@ -2,16 +2,15 @@ import os
 import sys
 sys.path.insert(0, os.path.abspath('..'))
 
-project = 'Threat Analysis MCP Server'
-copyright = '2024, Threat Analysis MCP Server'
-author = 'Threat Analysis MCP Server Team'
+project = 'Threat Analysis MCP'
+copyright = '2024, Threat Analysis MCP Team'
+author = 'Threat Analysis MCP Team'
 
 extensions = [
     'sphinx.ext.autodoc',
-    'sphinx.ext.viewcode',
     'sphinx.ext.napoleon',
+    'sphinx.ext.viewcode',
     'sphinx_rtd_theme',
-    'sphinx.ext.autosummary',
     'sphinx_autodoc_typehints'
 ]
 
@@ -29,4 +28,4 @@ autodoc_default_options = {
     'exclude-members': '__weakref__'
 }
 
-autosummary_generate = True 
+autodoc_typehints = 'description' 

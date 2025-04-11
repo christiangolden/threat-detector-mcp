@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify
-from typing import List, Optional, Dict, Tuple
+from typing import Dict, List, Tuple
 import nltk
 from nltk.tokenize import word_tokenize, sent_tokenize
 from nltk.tag import pos_tag
@@ -11,7 +11,14 @@ import logging
 import sys
 from datetime import datetime
 import networkx as nx
-from collections import defaultdict
+import json
+import os
+import time
+import psutil
+import threading
+import numpy as np
+from prometheus_client import Counter, Gauge, Histogram
+from prometheus_client.core import CollectorRegistry
 
 # Download required NLTK data
 try:
@@ -93,7 +100,11 @@ def extract_entity_relationships(text: str) -> Tuple[List[Dict], List[Dict]]:
                         "relationship": ' '.join(between_words)
                     }
                     relationships.append(relationship)
-                    entity_graph.add_edge(ent1["text"], ent2["text"], relationship=' '.join(between_words))
+                    entity_graph.add_edge(
+                        ent1["text"],
+                        ent2["text"],
+                        relationship=' '.join(between_words)
+                    )
     
     return entities, relationships
 
@@ -154,9 +165,8 @@ def analyze_text():
         data = request.get_json()
         if not data or "text" not in data:
             return jsonify({"error": "No text provided"}), 400
-            
+        
         text = data["text"]
-        metadata = data.get("metadata", {})
         
         logger.info(f"Received analysis request for text: {text[:100]}...")
         
@@ -198,12 +208,16 @@ def analyze_text():
                 sentence_keywords = []
                 for word in suspicious_keywords:
                     if word in sentence_lower:
-                        logger.warning(f"Found suspicious keyword '{word}' in sentence: {sentence}")
-                        suspicious_patterns.append(f"Found suspicious keyword '{word}' in: {sentence}")
+                        logger.warning(
+                            f"Found suspicious keyword '{word}' in sentence: {sentence}"
+                        )
+                        suspicious_patterns.append(
+                            f"Found suspicious keyword '{word}' in: {sentence}"
+                        )
                         sentence_keywords.append(word)
                         keyword_count += 1
                 
-                # Add exponential score based on number of keywords in the same sentence
+                # Add exponential score based on number of keywords in same sentence
                 if sentence_keywords:
                     threat_score += 0.3 * (1.5 ** (len(sentence_keywords) - 1))
                 
@@ -211,10 +225,14 @@ def analyze_text():
                 sent_sentiment = analyze_sentiment(sentence)
                 if sent_sentiment['compound'] < -0.5:  # Very negative sentiment
                     threat_score += 0.2
-                    suspicious_patterns.append(f"Found very negative sentiment in: {sentence}")
-                elif sent_sentiment['compound'] < -0.3:  # Moderately negative sentiment
+                    suspicious_patterns.append(
+                        f"Found very negative sentiment in: {sentence}"
+                    )
+                elif sent_sentiment['compound'] < -0.3:  # Moderately negative
                     threat_score += 0.1
-                    suspicious_patterns.append(f"Found negative sentiment in: {sentence}")
+                    suspicious_patterns.append(
+                        f"Found negative sentiment in: {sentence}"
+                    )
             
             # Add bonus for multiple keywords across different sentences
             if keyword_count > 1:
@@ -239,7 +257,7 @@ def analyze_text():
         except Exception as e:
             logger.error(f"Error during text analysis: {str(e)}", exc_info=True)
             return jsonify({"error": "Error during text analysis"}), 500
-            
+    
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}", exc_info=True)
         return jsonify({"error": "Invalid request"}), 400

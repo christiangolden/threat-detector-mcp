@@ -15,12 +15,15 @@ import time
 import psutil
 import logging
 from typing import Dict, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from fastapi import Request
-from prometheus_client import Counter, Histogram, Gauge, start_http_server
+from prometheus_client import Counter, Histogram, Gauge
 import threading
 import json
 import os
+import numpy as np
+from prometheus_client.core import CollectorRegistry
+from src.version import __version__
 
 # Prometheus metrics
 REQUEST_COUNT = Counter('threat_analysis_requests_total', 'Total number of requests')
@@ -51,6 +54,7 @@ class Monitoring:
         - System monitoring thread
         - Initial metrics collection
         """
+        self.start_time = datetime.now()
         self.logger = logging.getLogger('threat_analysis.monitoring')
         self.metrics_file = 'logs/metrics.json'
         self._setup_metrics_file()
@@ -187,7 +191,7 @@ class Monitoring:
         metrics = self._read_metrics()
         metrics['requests'] += 1
         metrics['avg_response_time'] = (
-            (metrics['avg_response_time'] * (metrics['requests'] - 1) + response_time) 
+            (metrics['avg_response_time'] * (metrics['requests'] - 1) + response_time)
             / metrics['requests']
         )
         metrics['max_response_time'] = max(metrics['max_response_time'], response_time)
@@ -256,13 +260,18 @@ class Monitoring:
                 - Application stats (requests, errors, response times)
                 - Current status
                 - Timestamp
+                - Uptime
+                - Version
         """
         memory = psutil.virtual_memory()
         cpu = psutil.cpu_percent()
+        uptime = datetime.now() - self.start_time
         
         return {
             'status': 'healthy',
             'timestamp': datetime.now().isoformat(),
+            'uptime': str(uptime),
+            'version': __version__,
             'system': {
                 'memory_used_percent': memory.percent,
                 'cpu_percent': cpu,
@@ -271,9 +280,11 @@ class Monitoring:
             'application': {
                 'requests_processed': REQUEST_COUNT._value.get(),
                 'error_count': ERROR_COUNT._value.get(),
-                'avg_response_time': REQUEST_LATENCY._sum.get() / max(1, REQUEST_COUNT._value.get())
+                'avg_response_time': (
+                    REQUEST_LATENCY._sum.get() / max(1, REQUEST_COUNT._value.get())
+                )
             }
         }
 
 # Initialize monitoring
-monitoring = Monitoring() 
+monitoring = Monitoring()

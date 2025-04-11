@@ -4,9 +4,6 @@ A FastAPI-based server for analyzing text communications for potential
 terrorist threats using NLP and machine learning.
 """
 
-__version__ = "0.1.0"
+from src.version import __version__
 
-from .app import app
-from .monitoring import monitoring
-
-__all__ = ["app", "monitoring"] 
+__all__ = ["__version__"]
