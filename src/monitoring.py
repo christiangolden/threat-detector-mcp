@@ -1,3 +1,16 @@
+"""Monitoring and Metrics Collection Module
+
+This module provides monitoring and metrics collection functionality for the
+Threat Analysis MCP Server. It includes:
+
+- System metrics collection (CPU, memory, disk usage)
+- Request tracking and latency monitoring
+- Threat score tracking
+- Error tracking
+- Health status monitoring
+- Prometheus metrics integration
+"""
+
 import time
 import psutil
 import logging
@@ -18,7 +31,26 @@ SYSTEM_CPU = Gauge('system_cpu_usage_percent', 'System CPU usage')
 ERROR_COUNT = Counter('threat_analysis_errors_total', 'Total number of errors')
 
 class Monitoring:
+    """Monitoring class for collecting and managing application metrics.
+    
+    This class handles:
+    - System metrics collection
+    - Request tracking
+    - Threat score monitoring
+    - Error tracking
+    - Health status monitoring
+    - Metrics persistence
+    """
+    
     def __init__(self):
+        """Initialize monitoring system.
+        
+        Sets up:
+        - Logging
+        - Metrics file
+        - System monitoring thread
+        - Initial metrics collection
+        """
         self.logger = logging.getLogger('threat_analysis.monitoring')
         self.metrics_file = 'logs/metrics.json'
         self._setup_metrics_file()
@@ -27,7 +59,18 @@ class Monitoring:
         self._start_system_monitoring()
 
     def _setup_metrics_file(self):
-        """Initialize metrics file if it doesn't exist"""
+        """Initialize metrics file if it doesn't exist.
+        
+        Creates a new metrics file with initial structure if it doesn't exist,
+        or validates and repairs existing metrics file.
+        
+        The metrics file structure includes:
+        - Request counts
+        - Error counts
+        - Response time statistics
+        - Threat score history
+        - System metrics history
+        """
         if not os.path.exists('logs'):
             os.makedirs('logs')
         
@@ -59,19 +102,41 @@ class Monitoring:
                     json.dump(initial_metrics, f)
 
     def _read_metrics(self) -> Dict[str, Any]:
-        """Read metrics from file with proper locking"""
+        """Read metrics from file with proper locking.
+        
+        Returns:
+            Dict[str, Any]: Current metrics data
+            
+        Note:
+            Uses thread locking to prevent concurrent access issues
+        """
         with self._lock:
             with open(self.metrics_file, 'r') as f:
                 return json.load(f)
 
     def _write_metrics(self, metrics: Dict[str, Any]):
-        """Write metrics to file with proper locking"""
+        """Write metrics to file with proper locking.
+        
+        Args:
+            metrics (Dict[str, Any]): Metrics data to write
+            
+        Note:
+            Uses thread locking to prevent concurrent access issues
+        """
         with self._lock:
             with open(self.metrics_file, 'w') as f:
                 json.dump(metrics, f)
 
     def _collect_metrics(self):
-        """Collect system metrics"""
+        """Collect system metrics.
+        
+        Collects:
+        - Memory usage
+        - CPU usage
+        - Timestamp
+        
+        Updates the metrics file with new system metrics.
+        """
         try:
             memory = psutil.virtual_memory()
             cpu = psutil.cpu_percent()
@@ -86,7 +151,11 @@ class Monitoring:
             self.logger.error(f"Error collecting system metrics: {str(e)}")
 
     def _start_system_monitoring(self):
-        """Start background thread for system metrics collection"""
+        """Start background thread for system metrics collection.
+        
+        Launches a daemon thread that collects system metrics every minute.
+        The thread handles errors gracefully and increases retry delay on failure.
+        """
         def collect_system_metrics():
             while True:
                 try:
@@ -100,7 +169,17 @@ class Monitoring:
         thread.start()
 
     async def track_request(self, request: Request, response_time: float):
-        """Track request metrics"""
+        """Track request metrics.
+        
+        Updates:
+        - Request count
+        - Response time statistics
+        - Prometheus metrics
+        
+        Args:
+            request (Request): The FastAPI request object
+            response_time (float): Time taken to process the request
+        """
         REQUEST_COUNT.inc()
         REQUEST_LATENCY.observe(response_time)
         
@@ -115,7 +194,16 @@ class Monitoring:
         self._write_metrics(metrics)
 
     def track_threat_score(self, score: float):
-        """Track threat score metrics"""
+        """Track threat score metrics.
+        
+        Updates:
+        - Current threat score
+        - Threat score history
+        - Prometheus metrics
+        
+        Args:
+            score (float): The threat score to track
+        """
         THREAT_SCORE.set(score)
         
         # Update metrics file
@@ -130,7 +218,15 @@ class Monitoring:
         self._write_metrics(metrics)
 
     def track_error(self, error_type: str):
-        """Track error metrics"""
+        """Track error metrics.
+        
+        Updates:
+        - Error count
+        - Prometheus metrics
+        
+        Args:
+            error_type (str): Type of error that occurred
+        """
         ERROR_COUNT.inc()
         
         # Update metrics file
@@ -139,11 +235,28 @@ class Monitoring:
         self._write_metrics(metrics)
 
     def get_metrics(self) -> Dict[str, Any]:
-        """Get current metrics"""
+        """Get current metrics.
+        
+        Returns:
+            Dict[str, Any]: Current metrics including:
+                - Request counts
+                - Error counts
+                - Response time statistics
+                - Threat score history
+                - System metrics history
+        """
         return self._read_metrics()
 
     def get_health_status(self) -> Dict[str, Any]:
-        """Get health status"""
+        """Get health status.
+        
+        Returns:
+            Dict[str, Any]: Health status including:
+                - System metrics (memory, CPU, disk)
+                - Application stats (requests, errors, response times)
+                - Current status
+                - Timestamp
+        """
         memory = psutil.virtual_memory()
         cpu = psutil.cpu_percent()
         

@@ -1,3 +1,22 @@
+"""Threat Analysis MCP Server - FastAPI Application
+
+This module provides a FastAPI-based server for analyzing text communications
+for potential terrorist threats using NLP and machine learning techniques.
+
+The server provides endpoints for:
+- Text analysis (/analyze)
+- Health monitoring (/health)
+- Metrics collection (/metrics)
+
+Key features:
+- Text analysis using NLTK
+- Sentiment analysis using VADER
+- Named entity recognition
+- Threat keyword detection
+- Comprehensive logging
+- Performance monitoring
+"""
+
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, validator
 from typing import List, Dict, Optional
@@ -17,6 +36,17 @@ from .monitoring import monitoring
 
 # Configure logging
 def setup_logging():
+    """Configure logging for the application.
+    
+    Sets up:
+    - Rotating file handlers for general and error logs
+    - Console handler with colored output
+    - Custom log levels for analysis and threat detection
+    - Detailed log formatting with timestamps and context
+    
+    Returns:
+        logging.Logger: Configured logger instance
+    """
     # Create logs directory if it doesn't exist
     if not os.path.exists('logs'):
         os.makedirs('logs')
@@ -85,12 +115,29 @@ except Exception as e:
     raise
 
 class TextAnalysisRequest(BaseModel):
+    """Request model for text analysis endpoint.
+    
+    Attributes:
+        text (str): The text to analyze. Must be non-empty and under 10000 characters.
+        metadata (Optional[Dict]): Additional metadata about the text (e.g., source, timestamp).
+    """
     text: str
     metadata: Optional[Dict] = None
     
     @validator('text')
     @classmethod
     def validate_text(cls, v: str) -> str:
+        """Validate the text input.
+        
+        Args:
+            v (str): The text to validate
+            
+        Returns:
+            str: The validated text
+            
+        Raises:
+            ValueError: If text is empty or exceeds length limit
+        """
         if not v.strip():
             raise ValueError("Text cannot be empty")
         if len(v) > 10000:
@@ -98,6 +145,16 @@ class TextAnalysisRequest(BaseModel):
         return v
 
 class TextAnalysisResponse(BaseModel):
+    """Response model for text analysis endpoint.
+    
+    Attributes:
+        threat_score (float): Score between 0 and 1 indicating threat level
+        suspicious_patterns (List[str]): List of detected threat-related patterns
+        confidence (float): Confidence score for the analysis
+        sentiment (Dict[str, float]): Sentiment analysis results
+        entities (List[Dict[str, str]]): Named entities found in text
+        pos_tags (List[Dict[str, str]]): Part-of-speech tags for each word
+    """
     threat_score: float
     suspicious_patterns: List[str]
     confidence: float
@@ -120,6 +177,23 @@ THREAT_KEYWORDS = {
 }
 
 def analyze_text(text: str) -> TextAnalysisResponse:
+    """Analyze text for potential threats using NLP techniques.
+    
+    Performs:
+    - Tokenization and POS tagging
+    - Named entity recognition
+    - Threat keyword detection
+    - Sentiment analysis
+    
+    Args:
+        text (str): The text to analyze
+        
+    Returns:
+        TextAnalysisResponse: Analysis results including threat score and patterns
+        
+    Raises:
+        Exception: If any analysis step fails
+    """
     try:
         logger.info(f"Starting analysis of text (length: {len(text)})")
         
@@ -230,6 +304,17 @@ def analyze_text(text: str) -> TextAnalysisResponse:
 
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
+    """Middleware to track request processing time.
+    
+    Adds X-Process-Time header and updates monitoring metrics.
+    
+    Args:
+        request (Request): The incoming request
+        call_next: Function to call the next middleware/route handler
+        
+    Returns:
+        Response: The response with added process time header
+    """
     start_time = time.time()
     response = await call_next(request)
     process_time = time.time() - start_time
@@ -239,12 +324,21 @@ async def add_process_time_header(request: Request, call_next):
 
 @app.get("/metrics")
 async def get_metrics():
-    """Get current metrics"""
+    """Get current application metrics.
+    
+    Returns:
+        Dict[str, Any]: Current metrics including request counts, response times,
+                       threat scores, and system metrics
+    """
     return monitoring.get_metrics()
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint.
+    
+    Returns:
+        Dict[str, Any]: Health status including system metrics and application stats
+    """
     try:
         health_status = monitoring.get_health_status()
         return health_status
@@ -252,23 +346,34 @@ async def health_check():
         logger.error(f"Health check failed: {str(e)}")
         raise HTTPException(status_code=500, detail="Health check failed")
 
-@app.post("/analyze")
-async def analyze_text_endpoint(request: TextAnalysisRequest):
-    """Analyze text for potential threats with monitoring"""
+@app.post("/analyze", response_model=TextAnalysisResponse)
+async def analyze(request: TextAnalysisRequest):
+    """Analyze text for potential threats.
+    
+    Args:
+        request (TextAnalysisRequest): The text to analyze and optional metadata
+        
+    Returns:
+        TextAnalysisResponse: Analysis results
+        
+    Raises:
+        HTTPException: If analysis fails
+    """
     try:
         logger.info(f"Received analysis request")
         logger.info(f"Starting analysis of text (length: {len(request.text)})")
         
         start_time = time.time()
-        result = analyze_text(request.text)
+        response = analyze_text(request.text)
         process_time = time.time() - start_time
         
-        # Track threat score
-        monitoring.track_threat_score(result.threat_score)
+        # Track metrics
+        monitoring.track_threat_score(response.threat_score)
+        await monitoring.track_request(request, process_time)
         
         logger.info("Successfully completed text analysis")
-        return result
+        return response
     except Exception as e:
-        logger.error(f"Error during analysis: {str(e)}")
-        monitoring.track_error(str(e.__class__.__name__))
-        raise HTTPException(status_code=500, detail=str(e)) 
+        logger.error(f"Analysis failed: {str(e)}\n{traceback.format_exc()}")
+        monitoring.track_error("analysis_error")
+        raise HTTPException(status_code=500, detail="Analysis failed") 
