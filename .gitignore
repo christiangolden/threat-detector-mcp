@@ -21,15 +21,28 @@ wheels/
 *.egg
 
 # Virtual Environment
+.venv/
 venv/
 ENV/
-env/
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# Logs
+logs/
+*.log
+
+# Installers
+*.exe
+*.msi
+*.zip
+
+# System Files
+.DS_Store
+Thumbs.db
 
 # Environment variables
 .env
@@ -38,17 +51,10 @@ env/
 *.db
 *.sqlite3
 
-# Logs
-*.log
-
 # NLTK data
 nltk_data/
 
 # Test coverage
 .coverage
 htmlcov/
-.pytest_cache/
-
-# OS specific
-.DS_Store
-Thumbs.db 
+.pytest_cache/ 
