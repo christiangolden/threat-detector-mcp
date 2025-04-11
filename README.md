@@ -17,6 +17,10 @@ A FastAPI-based server for analyzing text communications for potential terrorist
 │   ├── conftest.py        # Test configuration
 │   ├── test_threat_analysis.py  # Test cases
 │   └── test_monitoring.py # Monitoring tests
+├── docs/                  # Documentation
+│   ├── conf.py           # Sphinx configuration
+│   ├── index.rst         # Documentation index
+│   └── modules.rst       # Module documentation
 ├── logs/                  # Application logs
 │   ├── app.log           # General application logs
 │   ├── error.log         # Error logs
@@ -228,4 +232,28 @@ git checkout -b feature/new-feature
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Documentation
+
+The project includes comprehensive documentation generated using Sphinx. To build the documentation:
+
+1. Install the documentation dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+2. Build the documentation:
+```bash
+cd docs
+make html
+```
+
+The documentation will be available in `docs/_build/html/index.html`.
+
+The documentation includes:
+- API reference
+- Module documentation
+- Type hints
+- Code examples
+- Configuration details 
